@@ -1,0 +1,109 @@
+# Node.js with Angular
+# Build a Node.js project that uses Angular.
+# Add steps that analyze code, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/javascript
+
+trigger:
+- master
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Build
+    displayName: Build Angular App and publish artifacts
+    jobs:
+      - job: BuildAngularApp
+        displayName: Build Angular App
+        steps:
+        - task: NodeTool@0
+          inputs:
+            versionSpec: '14.x'
+            checkLatest: true
+          displayName: 'Install Node.js'
+
+        - script: |
+            npm install
+            npm install -g @angular/cli
+            npm install puppeteer --save-dev
+          displayName: 'Install the angular cli globally'
+
+        - task: Npm@1
+          inputs:
+            command: 'install'
+          displayName: 'Install angular app packages'
+
+        - task: Npm@1
+          displayName: 'Build Angular application'
+          inputs:
+            command: custom
+            customCommand: run build -- --prod
+
+        - task: ArchiveFiles@2
+          displayName: Zip Angular dist folder
+          inputs:
+            rootFolderOrFile: 'dist/angular7'
+            includeRootFolder: false
+            archiveType: 'zip'
+            archiveFile: '$(Build.ArtifactStagingDirectory)/angular7.zip'
+            replaceExistingArchive: true
+
+        - task: PublishBuildArtifacts@1
+          displayName: 'Publish Angular app dist folder Artifact'
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)/angular7.zip'
+            ArtifactName: 'drop'
+            publishLocation: 'Container'
+
+      - job: PublishARMArtifacts
+        displayName: Publish ARM artifact
+        steps:
+        - task: PublishBuildArtifacts@1
+          inputs:
+            PathtoPublish: 'src/Angular7/AzureResourceGroup.Infrastructure'
+            ArtifactName: 'arm-template'
+            publishLocation: 'Container'
+  
+  - stage: DeployToDev
+    displayName: Deploy to Dev
+    dependsOn: Build
+    jobs:
+      - deployment: DeployARMAndWebApp
+        displayName: Deploy infrastructure and web app
+        environment: 'dev'
+        variables: 
+        - group: VariableGroup-dev
+        strategy:
+          runOnce:
+            preDeploy:
+              steps:
+              - download: current
+                artifact: drop
+                displayName: Download Angular artifact
+              - download: current
+                artifact: arm-template
+                displayName: Download ARM template artifact
+            deploy:
+              steps:
+              - task: AzureResourceManagerTemplateDeployment@3
+                displayName: Deploy ARM Template
+                inputs:
+                  deploymentScope: 'Resource Group'
+                  azureResourceManagerConnection: 'cylcylcyl-dev'
+                  subscriptionId: 'c93d0db5-133d-406b-81a8-f00fbc17b575'
+                  action: 'Create Or Update Resource Group'
+                  resourceGroupName: 'setsco'
+                  location: 'Southeast Asia'
+                  templateLocation: 'Linked artifact'
+                  csmFile: '$(Pipeline.Workspace)/arm-template/WebSite.json'
+                  overrideParameters: '-environment $(environment)'
+                  deploymentMode: 'Incremental'
+
+              - task: AzureRmWebAppDeployment@4
+                displayName: Deploy Angular App
+                inputs:
+                  ConnectionType: 'AzureRM'
+                  azureSubscription: 'cylcylcyl-dev'
+                  appType: 'webApp'
+                  WebAppName: 'cylcylcyl-dev'
+                  packageForLinux: '$(Pipeline.Workspace)/drop/angular7.zip'
